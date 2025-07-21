@@ -15,22 +15,7 @@ for(size_t i = 0; i < fileSize; i++){
     }
 }
 ```
-is compiling to this with 03 and simd flags:
-
-```
-.LBB1_4:
-        mov     rax, r14
-        and     rax, -32
-        vpxor   xmm0, xmm0, xmm0
-        xor     ecx, ecx
-        vpbroadcastd    ymm1, dword ptr [rip + .LCPI1_1]
-        vpbroadcastb    xmm2, byte ptr [rip + .LCPI1_2]
-        vpxor   xmm3, xmm3, xmm3
-        vpxor   xmm4, xmm4, xmm4
-        vpxor   xmm5, xmm5, xmm5
-        .....
-```
-Which means the compiler is able to vectorize this on Anna Karennina file (pasted a couple hundred times to be over 200mb long)
+The compiler vectorizes this on its own.
 
 
 2) Uppercase All Characters
@@ -41,33 +26,8 @@ for(size_t i = 0; i < fileSize; i++){
     }
 }
 ```    
-Is compiling to this:
-```
-.LBB2_74:
-        vmovdqu xmm2, xmmword ptr [r15 + rcx]
-        vpaddb  xmm3, xmm2, xmm0
-        vpminub xmm4, xmm3, xmm1
-        vpcmpeqb        xmm3, xmm3, xmm4
-        vmovd   edx, xmm3
-        test    dl, 1
-        jne     .LBB2_75
-        vpextrb edx, xmm3, 1
-        test    dl, 1
-        jne     .LBB2_77
-.LBB2_78:
-        vpextrb edx, xmm3, 2
-        test    dl, 1
-        jne     .LBB2_79
-.LBB2_80:
-        vpextrb edx, xmm3, 3
-        test    dl, 1
-        jne     .LBB2_81
-.LBB2_82:
-        vpextrb edx, xmm3, 4
-        test    dl, 1
-        jne     .LBB2_83
-        .....
-```
+The compiler vectorizes this on its own.
+
 3) Find a Set of Characters (Vowels)
 ```
 for(size_t i = 0; i < fileSize; i++){
@@ -78,38 +38,8 @@ for(size_t i = 0; i < fileSize; i++){
     }
 }
 ```
+The compiler vectorizes this on its own.
 
-Is compiling to this:
-```
-       xor     eax, eax
-        jmp     .LBB3_7
-.LBB3_1:
-        xor     r12d, r12d
-        jmp     .LBB3_9
-.LBB3_4:
-        mov     rax, r14
-        and     rax, -32
-        vpxor   xmm10, xmm10, xmm10
-        xor     ecx, ecx
-        vpbroadcastd    ymm0, dword ptr [rip + .LCPI3_1]
-        vpbroadcastb    xmm2, byte ptr [rip + .LCPI3_7]
-        vpbroadcastb    xmm3, byte ptr [rip + .LCPI3_8]
-        vpbroadcastb    xmm4, byte ptr [rip + .LCPI3_9]
-        vpbroadcastb    xmm5, byte ptr [rip + .LCPI3_10]
-        vpxor   xmm11, xmm11, xmm11
-        vpxor   xmm12, xmm12, xmm12
-        vpxor   xmm13, xmm13, xmm13
-.LBB3_5:
-        vmovq   xmm9, qword ptr [r15 + rcx]
-        vmovq   xmm8, qword ptr [r15 + rcx + 8]
-        vmovq   xmm7, qword ptr [r15 + rcx + 16]
-        vmovq   xmm6, qword ptr [r15 + rcx + 24]
-        vpbroadcastb    xmm1, byte ptr [rip + .LCPI3_11]
-        vpcmpeqb        xmm14, xmm9, xmm1
-        vpmovzxbd       ymm14, xmm14
-        vpand   ymm14, ymm14, ymm0
-        .....
-```
 
 4) Find Patterns (4 characters in sequence)
 ```
@@ -147,29 +77,90 @@ for (size_t i = 0; i <= fileSize - 4; i++) {
 }
 ```
 
-```
-.LBB4_1:
-        mov     edx, 4
-        mov     rdi, r15
-        mov     rsi, r12
-        call    strncmp@PLT
-        cmp     eax, 1
-        adc     ebp, 0
-        inc     r15
-        dec     r14
-        jne     .LBB4_1
-        call    clock@PLT
-        mov     r14, rax
-        lea     rdi, [rip + .L.str.1]
-        mov     esi, ebp
-        xor     eax, eax
-        call    printf@PLT
-        sub     r14, rbx
-        lea     rdi, [rip + .L.str.2]
-        ....
-```
-
 Still nothing. Time to break out the intrinsics:
 
+Attempt one, Naive approach:
+
+We attempt to find if the first 4 chars are 'love' by doing a compare and then mask of current char array and 'love00000000000000000000000...' 
+
+```
+void FindPatterns(char* text, size_t fileSize) {
+    int characterLocations[1000000] = {0};
+    int currentIndex = 0;
+    __m256i pattern = _mm256_setr_epi8('l', 'o', 'v', 'e', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+    clock_t startTime = clock();    
+    size_t i = 0;
+    for (; i <= fileSize - 32; i+=32){
+        __m256i chunk = _mm256_loadu_si256((__m256i*)(text + i));
+        __m256i match = _mm256_cmpeq_epi8(chunk, pattern);
+        unsigned int mask = _mm256_movemask_epi8(match);
+        
+        if ((mask & 0b00000000000000000000000000001111) == 0b00000000000000000000000000001111) {
+            characterLocations[currentIndex++] = i;
+        }
+    }
+    clock_t endTime = clock();
+
+    printf("%d\n", currentIndex);
+    printf("Program execution took: %ld\n", (endTime - startTime));
+}
+```
+
+This only checks the first 4 characters of every 32 character array. To fix this using the same approach we would have to itterate over every possible starting position in the 32 character array. This would mean our SIMD has the same number of loops to find "love" as a naive implementation would. Making this an unviable solution when you account for the overhead of SIMD. (Clock speed dropping when using SIMD for example).
 
 
+Second solution:
+
+We use a filter pass, looking for if l,o,v,e are all in the chunk of text. If they are all in the chunk of text we remember the indexes of l and check them out later. This has a bug though. In a block of text that only has lo, and then cuts off and has ve at the start of the next one we will not record the index of l and thus miss the occurance of love here.
+
+```
+void FindPatterns(char* text, size_t fileSize) {
+    int characterLocations[1000000] = {0};
+    int currentIndex = 0;
+    const __m256i l_mask = _mm256_set1_epi8('l');
+    const __m256i o_mask = _mm256_set1_epi8('o');
+    const __m256i v_mask = _mm256_set1_epi8('v');
+    const __m256i e_mask = _mm256_set1_epi8('e');
+
+    clock_t startTime = clock();    
+    for (size_t i = 0; i <= fileSize - 32; i+=32){
+        __m256i chunk = _mm256_loadu_si256((__m256i*)(text + i));
+        
+        __m256i l_matches = _mm256_cmpeq_epi8(chunk, l_mask);
+        __m256i o_matches = _mm256_cmpeq_epi8(chunk, o_mask);
+        __m256i v_matches = _mm256_cmpeq_epi8(chunk, v_mask);
+        __m256i e_matches = _mm256_cmpeq_epi8(chunk, e_mask);
+        
+        unsigned int l_bits = _mm256_movemask_epi8(l_matches);
+        unsigned int o_bits = _mm256_movemask_epi8(o_matches);
+        unsigned int v_bits = _mm256_movemask_epi8(v_matches);
+        unsigned int e_bits = _mm256_movemask_epi8(e_matches);
+
+        if(l_bits > 0 && o_bits > 0 && v_bits > 0 && e_bits > 0){
+            while (l_bits != 0) {
+                int pos = __builtin_ctz(l_bits);
+                l_bits = l_bits & (l_bits - 1);
+                
+                if (i + pos + 3 < fileSize) {
+                    if (text[i+pos] == 'l' && 
+                        text[i+pos+1] == 'o' && 
+                        text[i+pos+2] == 'v' && 
+                        text[i+pos+3] == 'e') {
+                        characterLocations[currentIndex++] = i + pos;
+                    }
+                }
+            }
+        }
+    }
+    clock_t endTime = clock();
+
+    printf("%d\n", currentIndex);
+    printf("Program execution took: %ld\n", (endTime - startTime));
+}
+
+```
+
+Third solution:
+
+Naive filter approach, we collect all 'l's and then check if every l position has love as its first 4 characters.

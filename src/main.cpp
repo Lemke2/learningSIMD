@@ -69,32 +69,38 @@ void FindSetOfCharacters(char* text, size_t fileSize){
 void FindPatterns(char* text, size_t fileSize) {
     int characterLocations[1000000] = {0};
     int currentIndex = 0;
-    __m256i pattern = _mm256_setr_epi8('l', 'o', 'v', 'e', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    const __m256i l_mask = _mm256_set1_epi8('l');
+    const __m256i o_mask = _mm256_set1_epi8('o');
+    const __m256i v_mask = _mm256_set1_epi8('v');
+    const __m256i e_mask = _mm256_set1_epi8('e');
 
     clock_t startTime = clock();    
-    size_t i = 0;
-    for (; i <= fileSize - 32; i += 28) {
+    for (size_t i = 0; i <= fileSize - 32; i+=32){
         __m256i chunk = _mm256_loadu_si256((__m256i*)(text + i));
-        __m256i match = _mm256_cmpeq_epi8(chunk, pattern);
-        int mask = _mm256_movemask_epi8(match);
-        if (mask & 0xF) { 
-            if ((mask & 0xF) == 0xF) {
-                characterLocations[currentIndex++] = i;
-            }
-            
-            // Check additional windows within the 32-byte chunk
-            for (int j = 1; j <= 28; j++) {
-                if (((mask >> j) & 0xF) == 0xF) {
-                    characterLocations[currentIndex++] = i + j;
+        __m256i l_matches = _mm256_cmpeq_epi8(chunk, l_mask);
+        __m256i o_matches = _mm256_cmpeq_epi8(chunk, o_mask);
+        __m256i v_matches = _mm256_cmpeq_epi8(chunk, v_mask);
+        __m256i e_matches = _mm256_cmpeq_epi8(chunk, e_mask);
+        
+        unsigned int l_bits = _mm256_movemask_epi8(l_matches);
+        unsigned int o_bits = _mm256_movemask_epi8(o_matches);
+        unsigned int v_bits = _mm256_movemask_epi8(v_matches);
+        unsigned int e_bits = _mm256_movemask_epi8(e_matches);
+
+        if(l_bits > 0 && o_bits > 0 && v_bits > 0 && e_bits > 0){
+            while (l_bits != 0) {
+                int pos = __builtin_ctz(l_bits);
+                l_bits = l_bits & (l_bits - 1);
+                
+                if (i + pos + 3 < fileSize) {
+                    if (text[i+pos] == 'l' && 
+                        text[i+pos+1] == 'o' && 
+                        text[i+pos+2] == 'v' && 
+                        text[i+pos+3] == 'e') {
+                        characterLocations[currentIndex++] = i + pos;
+                    }
                 }
             }
-        }
-    }
-    // cleanup for remaining bytes
-    for (; i <= fileSize - 4; i++) {
-        if (text[i] == 'l' && text[i+1] == 'o' &&
-            text[i+2] == 'v' && text[i+3] == 'e') {
-            characterLocations[currentIndex++] = i;
         }
     }
     clock_t endTime = clock();
